@@ -11,11 +11,33 @@ description: Connect to KilatBot through MCP to inspect, create and teach privat
 
 Use an existing `kilat` MCP connection if available. Otherwise:
 
-1. Direct the owner to https://kilat.host/mcp_tokens. Create a separate named **Read only** token for this client, leaving **Site publish** and **PocketBase schema and record management** unchecked. Manual tokens expire after 30 days.
-2. Follow the client's recipe at https://kilat.host/docs/mcp#quickstart. Endpoint: `https://kilat.host/mcp`; transport: stateless Streamable HTTP; authentication: bearer token on every request. No browser OAuth, legacy SSE, persistent GET stream, or session ID. Use a desktop, CLI, or server-side MCP client, not browser frontend code.
-3. Have the owner supply the token privately through the client's secret store or supported environment reference. Never ask them to paste it into chat. Never read existing credential files, print tokens, put secrets in command arguments, commit them, or enable request-header logging. Merge configuration; preserve other servers and approval settings.
+Use OAuth sign-in for compatible clients; manual tokens remain an advanced fallback. Endpoint: `https://kilat.host/mcp`; transport: stateless Streamable HTTP with JSON responses. No legacy SSE, persistent GET stream, or session ID. Direct cross-origin frontend access is not supported; never put credentials in browser application code.
 
-For Codex, merge into its supported configuration, with `KILAT_MCP_TOKEN` supplied privately in the client process environment:
+### Sign in with KilatBot (recommended)
+
+Add the server URL, start the connection, and let the owner sign in and approve the client on KilatBot's consent page. Default access is `mcp:read`. Request `mcp:manage` only for an approved change and let the owner explicitly allow it; never approve consent on their behalf. Keep client tool approvals enabled. Disconnect unwanted clients under **Account → MCP**.
+
+| Client | Setup |
+| --- | --- |
+| Claude web/desktop | Settings → Connectors → Add custom connector; enter the endpoint and Connect. If offered, use Claude's published identity. |
+| ChatGPT | Enable Developer mode in Settings, create a connector with the endpoint, and choose OAuth. |
+| Claude Code | Run `claude mcp add --transport http kilat https://kilat.host/mcp`, then `/mcp` → Authenticate. |
+| Cursor | Merge `{"mcpServers":{"kilat":{"url":"https://kilat.host/mcp"}}}` into `mcp.json`, then Connect. |
+| Codex | Merge the TOML below into supported configuration, then run `codex mcp login kilat`. |
+
+```toml
+[mcp_servers.kilat]
+url = "https://kilat.host/mcp"
+enabled_tools = ["list_templates", "list_apps", "get_app"]
+```
+
+Do not add a manual Authorization header or `bearer_token_env_var` to the OAuth recipe. When switching an existing entry, remove only its manual-auth settings with the owner's approval; preserve other servers and tool restrictions. Let the client handle discovery, PKCE, token storage and refresh. Never request passwords, authorization codes, access tokens or refresh tokens in chat, and never read or print credential caches.
+
+### Manual token fallback
+
+For a client that cannot sign in, direct the owner to https://kilat.host/mcp_tokens → **Tokens (advanced)**. Create a separate named **Read only** token, leaving **Site publish** and **PocketBase schema and record management** unchecked. Manual tokens expire after 30 days; this lifetime does not describe OAuth tokens.
+
+Have the owner supply the token privately through the client's secret store or supported environment reference. Never ask them to paste it into chat, put it in command arguments, commit it, or enable request-header logging. For Codex, use this alternative configuration with `KILAT_MCP_TOKEN` supplied privately in the client process environment:
 
 ```toml
 [mcp_servers.kilat]
@@ -24,7 +46,7 @@ bearer_token_env_var = "KILAT_MCP_TOKEN"
 enabled_tools = ["list_templates", "list_apps", "get_app"]
 ```
 
-This allowlist intentionally permits only inspection. Do not silently expand it. Other clients use different secret-reference syntax; use the linked recipe, not this TOML. If no compatible MCP client is available, explain the prerequisite rather than inventing a REST API or installing a bridge.
+Both Codex allowlists intentionally permit only inspection. Do not silently expand them. Other clients use different configuration and secret-reference syntax; follow https://kilat.host/docs/mcp#quickstart. Merge configuration rather than replacing other servers. If no compatible MCP client is available, explain the prerequisite rather than inventing a REST API or installing a bridge. After either authentication method, verify `list_apps` succeeds; a configured server or successful sign-in alone does not prove tool access.
 
 ## 2. Inspect the workspace
 
@@ -47,7 +69,7 @@ Example request from the owner: “List my Kilat agents and show their status. D
 
 ### Read agent knowledge and schedules
 
-Agent tools require a manual owner workspace token (`read` or `manage`); agent and shop tokens cannot use them. Use the selected agent's integer ID as `agent_id`, not the lifecycle argument `app_id`. Confirm it belongs to the owner through `list_apps`/`get_app`. Enable additional tools in the client only with the owner's approval; the starter Codex allowlist above deliberately excludes them.
+Agent tools require an owner's OAuth connection (`mcp:read` or `mcp:manage`) or manual workspace token (`read` or `manage`); agent and shop tokens cannot use them. Use the selected agent's integer ID as `agent_id`, not the lifecycle argument `app_id`. Confirm it belongs to the owner through `list_apps`/`get_app`. Enable additional tools in the client only with the owner's approval; the starter Codex allowlists above deliberately exclude them.
 
 | Tool | Arguments | Behavior |
 | --- | --- | --- |
@@ -63,14 +85,14 @@ Agent tools require a manual owner workspace token (`read` or `manage`); agent a
 Inspection is the default. For an explicitly requested lifecycle action:
 
 1. Read `get_app` again. Show the exact ID, name, current status, proposed action, interruption risk, and possible usage cost. Do not quote an invented price; consult current billing information at https://kilat.host/docs/billing-and-support. Ask for explicit approval for that action on that service.
-2. Require a separately configured **Manage services** token and client permission for the named tool. The owner supplies credentials privately. Never bypass scope, service entitlement, suspension, or a server refusal. Call only the approved action with `{"app_id": 123}` using the selected integer ID.
+2. Require owner-approved OAuth `mcp:manage` access or a separately configured manual **Manage services** token, plus client permission for the named tool. The owner completes consent or supplies credentials privately. Never bypass scope, service entitlement, suspension, or a server refusal. Call only the approved action with `{"app_id": 123}` using the selected integer ID.
 3. Read `get_app` later to check progress. `starting`, `stopping`, and `queued` mean requested, not finished. Report the observed state and any unverified readiness. After timeout or ambiguous failure, inspect state before deciding whether another mutation is safe; do not blindly retry.
 
 Available lifecycle tools are `start_app`, `stop_app`, `restart_app`, and `deploy_app`. Exact availability depends on the service runtime, current state, and entitlement; consult https://kilat.host/docs/mcp and live schemas. `deploy_app` only retries an existing failed agent on a dedicated host. It does not create an agent. Do not use lifecycle tools as a general chat or profile-management API.
 
 ### Create and teach agents
 
-These changes require a manual owner workspace **manage** token, the client's approval for the exact tool, and explicit owner approval of the target and content. Agent and shop tokens cannot use them. Show costs before approval: creating an agent uses the plan allowance, without a purchase; a new agent costs nothing until it wakes. Files count toward billed Flash storage. Scheduled execution can incur future usage and Telegram delivery sends messages outside Kilat.
+These changes require owner-approved OAuth `mcp:manage` access or a manual owner workspace **manage** token, the client's approval for the exact tool, and explicit owner approval of the target and content. Agent and shop tokens cannot use them. Show costs before approval: creating an agent uses the plan allowance, without a purchase; a new agent costs nothing until it wakes. Files count toward billed Flash storage. Scheduled execution can incur future usage and Telegram delivery sends messages outside Kilat.
 
 Use `list_templates` and `get_plan` before creation; do not invent template keys or bypass allowance/waitlist checks. Use `create_agent`, not `deploy_app`, to create. Select the language explicitly with the owner; its default is `id`.
 
@@ -89,8 +111,8 @@ For changes whose live schema accepts optional `request_id`, supply one: 16–12
 
 Changes do not wake sleeping agents: they apply when the agent next wakes; awake agents receive them immediately. Report `pending`, `applied` or `failed` honestly using returned results and `list_agent_knowledge`; an accepted change is not proof of completed application. Do not wake an agent just to verify a write without approval.
 
-Connecting an integration remains the owner's action under Integrations. `set_agent_app` is not OAuth connection. `connect_app` belongs to an owner agent's own token, not this external manual-token workflow. Telegram pairing likewise requires the owner's signed-in page and approval; never auto-pair.
+Connecting Notion or Airtable remains the owner's action under Integrations, separate from signing an external assistant into Kilat MCP. `set_agent_app` grants access; it does not perform that integration's OAuth connection. `connect_app` belongs to an owner agent's own token, not this external owner-client workflow. Telegram pairing likewise requires the owner's signed-in page and approval; never auto-pair.
 
-Chat, payments, logs, terminals, environment variables, and service/agent deletion remain outside this workflow. Send the owner to the dashboard for those tasks. New Classic/Flex agents and new PocketBase purchases are not offered; existing services remain manageable. Site publishing and existing PocketBase management use separate opt-in permissions, not implied by manage scope; consult current documentation and obtain informed approval before public or destructive changes. Purchase-request tools never pay automatically.
+Chat, payments, logs, terminals, environment variables, and service/agent deletion remain outside this workflow. Send the owner to the dashboard for those tasks. New Classic/Flex agents and new PocketBase purchases are not offered; existing services remain manageable. Manual tokens have separate Site publish and PocketBase manage opt-ins; OAuth `mcp:manage` also grants those capabilities. Explain that broader access before requesting consent. Neither credential permission nor OAuth consent replaces informed approval for a public or destructive action. Consult current documentation for publishing and existing PocketBase management. Purchase-request tools never pay automatically.
 
-On HTTP 401, have the owner check token expiry/revocation and the client's environment privately. On 403 or a tool authorization refusal, stop and explain the boundary; do not try another tenant, host, or credential. On 429, respect `Retry-After`; avoid tight polling. For other errors, report the sanitized message and last observed state, never authorization headers or raw secret-bearing traces.
+On HTTP 401 with OAuth, use the client's supported reconnect/sign-in flow and have the owner check whether the connection was disconnected; never extract tokens to work around authentication. With a manual token, check expiry/revocation and the client's environment privately. On HTTP 403 `insufficient_scope`, explain the requested action and broader manage permissions, then use the client's supported authorization flow to request `mcp:manage` only with owner approval; never loop retries or silently switch credentials. Other 403/tool authorization refusals remain hard boundaries: do not try another tenant or host. On 429, respect `Retry-After`; avoid tight polling. For other errors, report the sanitized message and last observed state, never authorization headers or secret-bearing traces.
